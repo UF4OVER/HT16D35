@@ -33,15 +33,15 @@ RESET = Command(0xcc, [0])
 # COM引脚控制
 COM_CONTROL = Command(0x41, [0xFF])
 # COM输出
-COM_OUTPUT = Command(0x32, [0x07])
+COM_OUTPUT = Command(0x32, [0x07])  # 开启全部的COM输出
 # ROW输出
-ROW_OUTPUT = Command(0x42, [0xFF, 0xFF, 0xFF, 0xFF])
+ROW_OUTPUT = Command(0x42, [0xFF, 0xFF, 0xFF, 0xFF])  # 开启全部的ROW输出
 # 二进制/灰度模式选择
 MODE_SELECTION = Command(0x31, [0x01])
 # 恒流率
 CONSTANT_CURRENT = Command(0x36, [0x00])  # I ROW_MAX = 20MA
 # 全局亮度
-GLOBAL_BRIGHTNESS = Command(0x37, [63])  # 63/64 占空比 (修正: 最大值为63)
+GLOBAL_BRIGHTNESS = Command(0x37, [63])  # 63/64 占空比
 # OSC振荡器启动
 OSC_START = Command(0x35, [0x03])  # 正常显示模式– COM扫描有效
 
@@ -50,7 +50,7 @@ class HT16D35Base:
     def __init__(self, i2c: I2C, addr=0x68):
         self.i2c = i2c
         self.addr = addr
-        self.buffer = [[[0, 0, 0] for _ in range(8)] for _ in range(8)]
+
         self.display_ram = [0] * 28  # 跟踪当前显示RAM状态
 
     def _writeCommand(self, command, data=None):
@@ -68,6 +68,42 @@ class HT16D35Base:
     def _writeRam(self, address, value):
         self._writeCommand(0x80, [address, value])
         self.display_ram[address] = value  # 更新跟踪状态
+
+    def setBrightness(self, level):
+        if level < 0:
+            level = 0
+        elif level > 63:
+            level = 63
+
+        # 设置亮度命令
+        self._writeCommand(0x37, [level])
+
+
+class HT16D35BS(HT16D35Base):
+    """
+    单个芯片
+    """
+
+    def __init__(self, i2c: I2C, addr=0x68):
+        super().__init__(i2c, addr)
+        self.buffer = [[[0, 0, 0] for _ in range(8)] for _ in range(8)]
+        self._initChip()
+
+    def _initChip(self):
+        """初始化芯片设置"""
+        # 软件复位
+        self._writeCommand(0XCC)
+        time.sleep_ms(5)
+        self._writeCommand(MODE_SELECTION.CMD, MODE_SELECTION.VAL)  # 二进制/灰度模式选择
+        self._writeCommand(COM_OUTPUT.CMD, COM_OUTPUT.VAL)  # COM输出
+        self._writeCommand(CONSTANT_CURRENT.CMD, CONSTANT_CURRENT.VAL)  # 恒流率
+        self._writeCommand(GLOBAL_BRIGHTNESS.CMD, GLOBAL_BRIGHTNESS.VAL)  # 全局亮度
+        self._writeCommand(COM_CONTROL.CMD, COM_CONTROL.VAL)  # COM引脚控制
+        self._writeCommand(ROW_OUTPUT.CMD, ROW_OUTPUT.VAL)  # ROW输出
+        self._writeCommand(OSC_START.CMD, OSC_START.VAL)  # OSC振荡器启动
+        self.clear()
+        self.update()
+
     def _mapPixelPins(self, x, y, color):
         """
         将像素位置映射到 KEM-5088-RGB 的特殊引脚排列
@@ -131,6 +167,36 @@ class HT16D35Base:
 
         return updates
 
+    def setChar(self, char, x_offset=0, y_offset=0, color=(1, 0, 0)):
+        """
+        在指定位置显示一个字符
+        char: 单个字符
+        x_offset, y_offset: 偏移量
+        color: (R,G,B)
+        """
+        # 获取字模数据
+        char_data = ASCII_5x7.get(char, ASCII_5x7[' '])
+
+        for col in range(5):
+            col_data = char_data[col]
+            for row in range(7):
+                x = col + x_offset
+                y = row + y_offset
+                if 0 <= x < 8 and 0 <= y < 8:
+                    if col_data & (1 << (6 - row)):
+                        self.buffer[y][x] = color  # 点亮像素
+                    else:
+                        self.buffer[y][x] = (0, 0, 0)  # 关闭像素
+
+        self.update()
+
+    def setPoint(self, x, y, color):
+        """
+        设置单个像素颜色到缓冲区，不直接写硬件
+        """
+        if 0 <= x < 8 and 0 <= y < 8:
+            self.buffer[y][x] = color
+
     def update(self):
         """
         display on
@@ -160,73 +226,10 @@ class HT16D35Base:
         color: (R, G, B) 元组，默认黑色
         """
         # 清除所有显示 RAM
-        for i in range(24):  # ROW0-23
+        for i in range(28):  # ROW0-28
             self._writeRam(i, 0x00)
 
         # 更新缓冲区
         for y in range(8):
             for x in range(8):
                 self.buffer[y][x] = color
-
-    def setPoint(self, x, y, color):
-        """
-        设置单个像素颜色到缓冲区，不直接写硬件
-        """
-        if 0 <= x < 8 and 0 <= y < 8:
-            self.buffer[y][x] = color
-
-    def setBrightness(self, level):
-        if level < 0:
-            level = 0
-        elif level > 63:
-            level = 63
-
-        # 设置亮度命令
-        self._writeCommand(0x37, [level])
-
-
-class HT16D35BS(HT16D35Base):
-    """
-    单个芯片
-    """
-    def __init__(self, i2c: I2C, addr=0x68):
-        super().__init__(i2c, addr)
-        self._initChip()
-    def _initChip(self):
-        """初始化芯片设置"""
-        # 软件复位
-        self._writeCommand(0XCC)
-        time.sleep_ms(5)
-        self._writeCommand(MODE_SELECTION.CMD, MODE_SELECTION.VAL)  # 二进制/灰度模式选择
-        self._writeCommand(COM_OUTPUT.CMD, COM_OUTPUT.VAL)  # COM输出
-        self._writeCommand(CONSTANT_CURRENT.CMD, CONSTANT_CURRENT.VAL)  # 恒流率
-        self._writeCommand(GLOBAL_BRIGHTNESS.CMD, GLOBAL_BRIGHTNESS.VAL)  # 全局亮度
-        self._writeCommand(COM_CONTROL.CMD, COM_CONTROL.VAL)  # COM引脚控制
-        self._writeCommand(ROW_OUTPUT.CMD, ROW_OUTPUT.VAL)  # ROW输出
-        self._writeCommand(OSC_START.CMD, OSC_START.VAL)  # OSC振荡器启动
-        self.clear()
-        self.update()
-
-    def setChar(self, char, x_offset=0, y_offset=0, color=(1, 0, 0)):
-        """
-        在指定位置显示一个字符
-        char: 单个字符
-        x_offset, y_offset: 偏移量
-        color: (R,G,B)
-        """
-        # 获取字模数据
-        char_data = ASCII_5x7.get(char, ASCII_5x7[' '])
-
-        for col in range(5):
-            col_data = char_data[col]
-            for row in range(7):
-                x = col + x_offset
-                y = row + y_offset
-                if 0 <= x < 8 and 0 <= y < 8:
-                    if col_data & (1 << (6 - row)):
-                        self.buffer[y][x] = color  # 点亮像素
-                    else:
-                        self.buffer[y][x] = (0, 0, 0)  # 关闭像素
-
-        self.update()
-
