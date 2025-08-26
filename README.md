@@ -4,14 +4,14 @@
 1. KEM 5088 BRGB数码管模块
    ![mokuai](https://img.hepi.ng/v2/XA85XEs.jpeg)
 2. 这是模块引出的引脚，按照左到右的顺序
-![img.png](IMG/img.png)
+   ![img.png](https://img.hepi.ng/v2/JTOUrQl.png)
 3. KEM 5088 BRGB数码管连接HT16D35B，上下引脚对应HT16D35B的引脚
-![img.png](IMG/img_1.png)
+   ![img_1.png](https://img.hepi.ng/v2/3TV6i8E.png)
 4. 按照5088的原理图
-![1670294233145HTB1UCsBIFXXXXbDXFXXq6xXFXXXE.png](IMG/1670294233145HTB1UCsBIFXXXXbDXFXXq6xXFXXXE.png)
+   ![as.png](https://img.hepi.ng/v2/rf3fVnf.png)
 5. 引脚对应关系，芯片row0对应数码管col1，依次类推
-![img_2.png](IMG/img_2.png)
-![img_3.png](IMG/img_3.png)
+   ![img_2.png](https://img.hepi.ng/v2/LOIvKho.png)
+   ![img_3.png](https://img.hepi.ng/v2/3fsYyyf.png)
 
 ## 代码
 1. 在ht16d35b.py文件中,首先有一个基类`HT16D35Base`,在这个基类中定义了所有的IO方法，包括初始化，设置亮度，设置显示模式，这些方法都是适用于任何练级方式的数码管，不管是否是RGB的。
