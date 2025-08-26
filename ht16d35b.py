@@ -108,14 +108,14 @@ class HT16D35:
 
         # 定义列到 ROW 引脚的映射
         column_to_row = {
-            0: [0, 8, 23],   # 第一列: R, G, B 对应的 ROW 引脚
-            1: [1, 9, 22],   # 第二列
+            0: [0, 8, 23],  # 第一列: R, G, B 对应的 ROW 引脚
+            1: [1, 9, 22],  # 第二列
             2: [2, 10, 21],  # 第三列
             3: [3, 11, 20],  # 第四列
             4: [4, 12, 19],  # 第五列
             5: [5, 13, 18],  # 第六列
             6: [6, 14, 17],  # 第七列
-            7: [7, 15, 16]   # 第八列
+            7: [7, 15, 16]  # 第八列
         }
 
         # 定义行到 COM 引脚的映射
@@ -129,7 +129,7 @@ class HT16D35:
             4: 4,  # 第五行 -> COM4
             5: 5,  # 第六行 -> COM5
             6: 6,  # 第七行 -> COM6
-            7: 7   # 第八行 -> COM7
+            7: 7  # 第八行 -> COM7
         }
 
         # 获取当前列的 ROW 引脚
@@ -153,16 +153,10 @@ class HT16D35:
 
     def set_pixel(self, x, y, color):
         """
-        设置单个像素的颜色
-
-        参数:
-        x: X 坐标 (0-7, 列)
-        y: Y 坐标 (0-7, 行)
-        color: (R, G, B) 元组，每个值 0-1 (0=关, 1=开)
+        设置单个像素颜色到缓冲区，不直接写硬件
         """
         if 0 <= x < 8 and 0 <= y < 8:
             self.buffer[y][x] = color
-
 
     def read_display_ram(self, address):
         """
@@ -207,31 +201,49 @@ class HT16D35:
             for x in range(8):
                 self.buffer[y][x] = color
 
-
     def update(self):
         """
-        更新整个显示
-        这种方法效率较低，但确保显示正确
+        将缓冲区刷新到 HT16D35 显示
         """
-        # 先清除所有显示 RAM
-        for i in range(28):  # ROW0-27
+        # 清空显示 RAM
+        for i in range(28):
             self.write_display_ram(i, 0x00)
 
-        # 然后逐个设置每个像素
+        # 遍历整个 8x8 buffer
         for y in range(8):
             for x in range(8):
                 color = self.buffer[y][x]
                 updates = self.map_pixel_to_pins(x, y, color)
-
                 for row_pin, com_bit in updates:
-                    # 计算显示 RAM 地址
                     ram_address = row_pin
-                    # 读取当前值
                     current_value = self.read_display_ram(ram_address)
-                    # 设置相应的位
                     new_value = current_value | (1 << com_bit)
-                    # 写回显示 RAM
                     self.write_display_ram(ram_address, new_value)
+
+    def display_char(self, char, x_offset=0, y_offset=0, color=(1, 0, 0)):
+        """
+        在指定位置显示一个字符
+        char: 单个字符
+        x_offset, y_offset: 偏移量
+        color: (R,G,B)
+        """
+        # 获取字模数据
+        char_data = ASCII_5x7.get(char, ASCII_5x7[' '])
+
+        for col in range(5):
+            col_data = char_data[col]
+            for row in range(7):
+                x = col + x_offset
+                y = row + y_offset
+                if 0 <= x < 8 and 0 <= y < 8:
+                    if col_data & (1 << (6 - row)):
+                        self.buffer[y][x] = color  # 点亮像素
+                    else:
+                        self.buffer[y][x] = (0, 0, 0)  # 关闭像素
+
+        # 最后统一刷新
+        self.update()
+
     def set_brightness(self, level):
         """
         设置全局亮度
@@ -246,36 +258,3 @@ class HT16D35:
 
         # 设置亮度命令
         self.write_command(0x37, [level])
-    def display_char(self, char, x_offset=1, y_offset=0, color=(1, 0, 0)):
-        """
-        在指定位置显示一个字符
-
-        参数:
-        char: 要显示的字符
-        x_offset: X 偏移量 (0-3)
-        y_offset: Y 偏移量 (0-1)
-        color: (R, G, B) 元组
-        """
-        # 获取字符的点阵数据
-        if char in ASCII_5x7:
-            char_data = ASCII_5x7[char]
-        else:
-            # 如果字符不在字库中，显示空格
-            char_data = ASCII_5x7[' ']
-
-        # 清除显示
-        self.clear()
-
-        # 显示字符
-        for col in range(5):  # 5列
-            col_data = char_data[col]
-            for row in range(7):  # 7行
-                # 检查该位是否被设置（注意位顺序）
-                if col_data & (1 << (6-row)):
-                    x = col + x_offset
-                    y = row + y_offset
-                    if 0 <= x < 8 and 0 <= y < 8:
-                        self.set_pixel(x, y, color)
-
-        # 更新显示
-        self.update()
