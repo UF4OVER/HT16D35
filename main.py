@@ -17,7 +17,7 @@ import math
 
 DEBUG = False
 if DEBUG:
-    from ht16d35b_i2c import HT16D35BS
+    from ht16d35b import HT16D35BS
 
     # 使用 I2C 接口
     display = HT16D35BS(I2C(0, scl=Pin(18), sda=Pin(17)), addr=0x68)
@@ -117,7 +117,7 @@ if DEBUG:
     animation_test()
 
 else:
-    from ht16d35b_i2c import HT16D35BS
+    from ht16d35b import HT16D35BS
     # 使用 I2C 接口
     display = HT16D35BS(I2C(0, scl=Pin(18), sda=Pin(17)), addr=0x68)
     display.clear()

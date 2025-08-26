@@ -1,94 +1,74 @@
-from machine import Pin, SPI, I2C
+# -*- coding: utf-8 -*-
+# -------------------------------
+#  @Project : H16D35B
+#  @Time    : 2025 - 08-25 21:09
+#  @FileName: ht16d35b.py
+#  @Software: PyCharm 2024.1.6 (Professional Edition)
+#  @System  : Windows 11 23H2
+#  @Author  : 33974
+#  @Contact : 
+#  @Python  : 
+# -------------------------------
 import time
+from machine import I2C
 
 from font import ASCII_5x7
 
 
-class HT16D35:
-    def __init__(self, interface_type='spi', **kwargs):
-        """
-        初始化 HT16D35 驱动器，专为 KEM-5088-RGB 数码管模块设计
+class Command:
+    def __init__(self, command: int, val: list):
+        self._command = command
+        self._val = val
 
-        参数:
-        interface_type: 'spi' 或 'i2c'
-        **kwargs: 接口相关参数
-            SPI: sck, mosi, miso, cs, baudrate
-            I2C: scl, sda, addr (默认 0x68)
-        """
-        self.interface_type = interface_type.lower()
+    @property
+    def CMD(self):
+        return self._command
 
-        if self.interface_type == 'spi':
-            self.spi = SPI(kwargs.get('spi_bus', 0),
-                           baudrate=kwargs.get('baudrate', 1000000),
-                           polarity=0,
-                           phase=0,
-                           sck=Pin(kwargs.get('sck', 0)),
-                           mosi=Pin(kwargs.get('mosi', 1)),
-                           miso=Pin(kwargs.get('miso', 2)))
-            self.cs = Pin(kwargs.get('cs', 3), Pin.OUT)
-            self.cs.value(1)
-        elif self.interface_type == 'i2c':
-            self.i2c = I2C(kwargs.get('i2c_bus', 0),
-                           scl=Pin(kwargs.get('scl', 5)),
-                           sda=Pin(kwargs.get('sda', 4)),
-                           freq=kwargs.get('freq', 400000))
-            self.addr = kwargs.get('addr', 0x68)
-        else:
-            raise ValueError("不支持的接口类型，请选择 'spi' 或 'i2c'")
+    @property
+    def VAL(self):
+        return self._val
 
-        # 初始化显示缓冲区 (8x8x3)
+
+RESET = Command(0xcc, [0])
+# COM引脚控制
+COM_CONTROL = Command(0x41, [0xFF])
+# COM输出
+COM_OUTPUT = Command(0x32, [0x07])
+# ROW输出
+ROW_OUTPUT = Command(0x42, [0xFF, 0xFF, 0xFF, 0xFF])
+# 二进制/灰度模式选择
+MODE_SELECTION = Command(0x31, [0x01])
+# 恒流率
+CONSTANT_CURRENT = Command(0x36, [0x00])  # I ROW_MAX = 20MA
+# 全局亮度
+GLOBAL_BRIGHTNESS = Command(0x37, [63])  # 63/64 占空比 (修正: 最大值为63)
+# OSC振荡器启动
+OSC_START = Command(0x35, [0x03])  # 正常显示模式– COM扫描有效
+
+
+class HT16D35Base:
+    def __init__(self, i2c: I2C, addr=0x68):
+        self.i2c = i2c
+        self.addr = addr
         self.buffer = [[[0, 0, 0] for _ in range(8)] for _ in range(8)]
+        self.display_ram = [0] * 28  # 跟踪当前显示RAM状态
 
-        # 初始化芯片
-        self.init_chip()
+    def _writeCommand(self, command, data=None):
+        if data is None:
+            self.i2c.writeto(self.addr, bytearray([command]))
+        else:
+            self.i2c.writeto(self.addr, bytearray([command] + data))
 
-    def write_command(self, command, data=None):
-        """写入命令到芯片"""
-        if self.interface_type == 'spi':
-            self.cs.value(0)
-            self.spi.write(bytearray([command]))
-            if data is not None:
-                self.spi.write(bytearray(data))
-            self.cs.value(1)
-        else:  # I2C
-            if data is None:
-                self.i2c.writeto(self.addr, bytearray([command]))
-            else:
-                self.i2c.writeto(self.addr, bytearray([command] + data))
+    def _readRam(self, address):
+        self._writeCommand(0x81, [address])
+        # I2C 读取
+        data = self.i2c.readfrom(self.addr, 1)
+        return data[0] if data else 0
 
-    def init_chip(self):
-        """初始化芯片设置"""
-        # 软件复位
-        self.write_command(0xCC)
-        time.sleep(0.01)
-
-        # 设置二进制模式
-        self.write_command(0x31, [0x01])  # 二进制模式
-
-        # 设置 COM 输出数量为 8
-        self.write_command(0x32, [0x07])  # COM0-7
-
-        # 设置恒流率 (最大电流)
-        self.write_command(0x36, [0x00])
-
-        # 设置全局亮度 (最大亮度)
-        self.write_command(0x37, [0x40])  # 64/64 占空比
-
-        # 设置 COM 引脚控制 (开启所有 COM 输出)
-        self.write_command(0x41, [0xFF])
-
-        # 设置 ROW 引脚控制 (开启所有 ROW 输出)
-        # 根据 KEM-5088-RGB 的特殊引脚排列
-        self.write_command(0x42, [0xFF, 0xFF, 0xFF, 0xFF])
-
-        # 开启系统振荡器和显示
-        self.write_command(0x35, [0x03])
-
-        # 清除显示
-        self.clear()
-        self.update()
-
-    def map_pixel_to_pins(self, x, y, color):
+    def _writeRam(self, address, value):
+        self._writeCommand(0x80, [address, value])
+        self.display_ram[address] = value  # 更新跟踪状态
+    def _mapPixelPins(self, x, y, color):
         """
         将像素位置映射到 KEM-5088-RGB 的特殊引脚排列
 
@@ -136,54 +116,41 @@ class HT16D35:
         r_pin, g_pin, b_pin = column_to_row[x]
 
         # 获取当前行的 COM 位
-        com_bit = row_to_com[y]
+        com_pin = row_to_com[y]
 
         # 准备更新数据
         updates = []
         r, g, b = color
 
         if r > 0.5:  # 红色
-            updates.append((r_pin, com_bit))
+            updates.append((r_pin, com_pin))
         if g > 0.5:  # 绿色
-            updates.append((g_pin, com_bit))
+            updates.append((g_pin, com_pin))
         if b > 0.5:  # 蓝色
-            updates.append((b_pin, com_bit))
+            updates.append((b_pin, com_pin))
 
         return updates
 
-    def set_pixel(self, x, y, color):
+    def update(self):
         """
-        设置单个像素颜色到缓冲区，不直接写硬件
+        display on
+        :return: None
         """
-        if 0 <= x < 8 and 0 <= y < 8:
-            self.buffer[y][x] = color
+        ram_updates = {}
+        for y in range(8):
+            for x in range(8):
+                color = self.buffer[y][x]
+                updates = self._mapPixelPins(x, y, color)
+                for row_pin, com_pin in updates:
+                    if row_pin not in ram_updates:
+                        ram_updates[row_pin] = 0
+                    ram_updates[row_pin] |= (1 << com_pin)
 
-    def read_display_ram(self, address):
-        """
-        读取显示 RAM 的值
-        """
-        # 发送读命令
-        self.write_command(0x81, [address])
-
-        # 读取数据 (SPI 需要额外处理)
-        if self.interface_type == 'spi':
-            self.cs.value(0)
-            # 发送空字节以读取数据
-            self.spi.write(bytearray([0x00]))
-            # 读取响应
-            data = self.spi.read(1)
-            self.cs.value(1)
-            return data[0] if data else 0
-        else:
-            # I2C 读取
-            data = self.i2c.readfrom(self.addr, 1)
-            return data[0] if data else 0
-
-    def write_display_ram(self, address, value):
-        """
-        写入显示 RAM
-        """
-        self.write_command(0x80, [address, value])
+        # 只更新变化的RAM地址
+        for ram_address in range(28):
+            new_value = ram_updates.get(ram_address, 0)
+            if new_value != self.display_ram[ram_address]:
+                self._writeRam(ram_address, new_value)
 
     def clear(self, color=(0, 0, 0)):
         """
@@ -193,34 +160,54 @@ class HT16D35:
         color: (R, G, B) 元组，默认黑色
         """
         # 清除所有显示 RAM
-        for i in range(28):  # ROW0-27
-            self.write_display_ram(i, 0x00)
+        for i in range(24):  # ROW0-23
+            self._writeRam(i, 0x00)
 
         # 更新缓冲区
         for y in range(8):
             for x in range(8):
                 self.buffer[y][x] = color
 
-    def update(self):
+    def setPoint(self, x, y, color):
         """
-        将缓冲区刷新到 HT16D35 显示
+        设置单个像素颜色到缓冲区，不直接写硬件
         """
-        # 清空显示 RAM
-        for i in range(28):
-            self.write_display_ram(i, 0x00)
+        if 0 <= x < 8 and 0 <= y < 8:
+            self.buffer[y][x] = color
 
-        # 遍历整个 8x8 buffer
-        for y in range(8):
-            for x in range(8):
-                color = self.buffer[y][x]
-                updates = self.map_pixel_to_pins(x, y, color)
-                for row_pin, com_bit in updates:
-                    ram_address = row_pin
-                    current_value = self.read_display_ram(ram_address)
-                    new_value = current_value | (1 << com_bit)
-                    self.write_display_ram(ram_address, new_value)
+    def setBrightness(self, level):
+        if level < 0:
+            level = 0
+        elif level > 63:
+            level = 63
 
-    def display_char(self, char, x_offset=0, y_offset=0, color=(1, 0, 0)):
+        # 设置亮度命令
+        self._writeCommand(0x37, [level])
+
+
+class HT16D35BS(HT16D35Base):
+    """
+    单个芯片
+    """
+    def __init__(self, i2c: I2C, addr=0x68):
+        super().__init__(i2c, addr)
+        self._initChip()
+    def _initChip(self):
+        """初始化芯片设置"""
+        # 软件复位
+        self._writeCommand(0XCC)
+        time.sleep_ms(5)
+        self._writeCommand(MODE_SELECTION.CMD, MODE_SELECTION.VAL)  # 二进制/灰度模式选择
+        self._writeCommand(COM_OUTPUT.CMD, COM_OUTPUT.VAL)  # COM输出
+        self._writeCommand(CONSTANT_CURRENT.CMD, CONSTANT_CURRENT.VAL)  # 恒流率
+        self._writeCommand(GLOBAL_BRIGHTNESS.CMD, GLOBAL_BRIGHTNESS.VAL)  # 全局亮度
+        self._writeCommand(COM_CONTROL.CMD, COM_CONTROL.VAL)  # COM引脚控制
+        self._writeCommand(ROW_OUTPUT.CMD, ROW_OUTPUT.VAL)  # ROW输出
+        self._writeCommand(OSC_START.CMD, OSC_START.VAL)  # OSC振荡器启动
+        self.clear()
+        self.update()
+
+    def setChar(self, char, x_offset=0, y_offset=0, color=(1, 0, 0)):
         """
         在指定位置显示一个字符
         char: 单个字符
@@ -241,20 +228,5 @@ class HT16D35:
                     else:
                         self.buffer[y][x] = (0, 0, 0)  # 关闭像素
 
-        # 最后统一刷新
         self.update()
 
-    def set_brightness(self, level):
-        """
-        设置全局亮度
-
-        参数:
-        level: 亮度级别 (0-63)
-        """
-        if level < 0:
-            level = 0
-        elif level > 63:
-            level = 63
-
-        # 设置亮度命令
-        self.write_command(0x37, [level])
